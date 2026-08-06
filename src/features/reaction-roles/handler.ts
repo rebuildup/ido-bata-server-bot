@@ -7,11 +7,7 @@ import type {
 } from "discord.js";
 import { Events } from "discord.js";
 
-import {
-  findReactionRoleRule,
-  type EmojiLike,
-  type ReactionRoleRule,
-} from "./config.js";
+import { type EmojiLike, findReactionRoleRule, type ReactionRoleRule } from "./config.js";
 
 type RoleManagerLike = {
   add: (roleId: string) => Promise<unknown>;

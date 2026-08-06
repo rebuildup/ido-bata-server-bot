@@ -1,8 +1,6 @@
 import { Client, GatewayIntentBits, Partials } from "discord.js";
 
-export function createDiscordClient(options?: {
-  enableMessageContentIntent?: boolean;
-}): Client {
+export function createDiscordClient(options?: { enableMessageContentIntent?: boolean }): Client {
   const intents = [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,

@@ -44,7 +44,9 @@ export async function fetchRandomWikipediaTopic(
     return {
       extract: data.extract,
       title: data.title,
-      url: data.content_urls?.desktop?.page ?? `https://ja.wikipedia.org/wiki/${encodeURIComponent(data.title)}`,
+      url:
+        data.content_urls?.desktop?.page ??
+        `https://ja.wikipedia.org/wiki/${encodeURIComponent(data.title)}`,
     };
   } catch {
     return fallbackTopics[Math.floor(Math.random() * fallbackTopics.length)] ?? fallbackTopics[0]!;

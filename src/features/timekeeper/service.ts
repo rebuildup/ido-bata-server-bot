@@ -2,27 +2,17 @@ import { existsSync } from "node:fs";
 
 import {
   AudioPlayerStatus,
-  NoSubscriberBehavior,
-  VoiceConnectionStatus,
   createAudioPlayer,
   createAudioResource,
   entersState,
   joinVoiceChannel,
+  NoSubscriberBehavior,
+  VoiceConnectionStatus,
 } from "@discordjs/voice";
 import type { Client, GuildMember, VoiceBasedChannel } from "discord.js";
-import {
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle,
-  ChannelType,
-  Events,
-} from "discord.js";
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, Events } from "discord.js";
 
-import {
-  isTimekeeperConfigured,
-  timekeeperConfig,
-  type TimekeeperConfig,
-} from "./config.js";
+import { isTimekeeperConfigured, type TimekeeperConfig, timekeeperConfig } from "./config.js";
 import {
   buildCheckInCustomId,
   buildCheckInLabel,
@@ -34,6 +24,8 @@ import {
   recordCheckIn,
   type TimekeeperSessionEngagement,
 } from "./engagement.js";
+import type { PlaybackTimeouts } from "./playback-budget.js";
+import { resolvePlaybackTimeouts } from "./playback-budget.js";
 import { getCurrentOrNextDailyStartAt } from "./schedule.js";
 import {
   buildProgressMessage,
@@ -111,7 +103,9 @@ export function registerTimekeeper(client: Client): void {
         ? sessionStartAt
         : now;
 
-      console.log(`Running timekeeper immediately because TIMEKEEPER_RUN_ON_READY=true (startAt=${startAt.toISOString()})`);
+      console.log(
+        `Running timekeeper immediately because TIMEKEEPER_RUN_ON_READY=true (startAt=${startAt.toISOString()})`,
+      );
       void runSession(client, timekeeperConfig, startAt).catch((error: unknown) => {
         console.error("Immediate timekeeper session failed", error);
       });
@@ -124,7 +118,9 @@ export function registerTimekeeper(client: Client): void {
 
 function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
   if (!isTimekeeperConfigured(config)) {
-    console.warn("Timekeeper is disabled. Set voiceChannelId and textChannelId in timekeeper config.");
+    console.warn(
+      "Timekeeper is disabled. Set voiceChannelId and textChannelId in timekeeper config.",
+    );
     return;
   }
 
@@ -137,7 +133,9 @@ function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
   const preparationStartAt = new Date(nextStartAt.getTime() - 60_000);
   const delayMs = Math.max(0, preparationStartAt.getTime() - Date.now());
 
-  console.log(`Next timekeeper session scheduled for ${nextStartAt.toISOString()} (preparation starts at ${preparationStartAt.toISOString()})`);
+  console.log(
+    `Next timekeeper session scheduled for ${nextStartAt.toISOString()} (preparation starts at ${preparationStartAt.toISOString()})`,
+  );
 
   setTimeout(() => {
     void runSession(client, config, nextStartAt)
@@ -150,11 +148,7 @@ function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
   }, delayMs);
 }
 
-function isWithinSessionWindow(
-  now: Date,
-  startAt: Date,
-  config: TimekeeperConfig,
-): boolean {
+function isWithinSessionWindow(now: Date, startAt: Date, config: TimekeeperConfig): boolean {
   const totalDurationMinutes = config.phases.reduce(
     (total, phase) => total + phase.durationMinutes,
     0,
@@ -163,11 +157,7 @@ function isWithinSessionWindow(
   return now >= startAt && now < sessionEndAt;
 }
 
-async function runSession(
-  client: Client,
-  config: TimekeeperConfig,
-  startAt: Date,
-): Promise<void> {
+async function runSession(client: Client, config: TimekeeperConfig, startAt: Date): Promise<void> {
   const voiceChannel = await resolveVoiceChannel(client, config.voiceChannelId);
   const textChannel = await resolveTextChannel(client, config.textChannelId);
 
@@ -200,9 +190,13 @@ async function runSession(
     if (now < eventEnd) {
       startIndex = i;
       if (event.at > now) {
-        console.log(`[Timekeeper] Starting from upcoming phase: ${event.label} (at ${event.at.toISOString()})`);
+        console.log(
+          `[Timekeeper] Starting from upcoming phase: ${event.label} (at ${event.at.toISOString()})`,
+        );
       } else {
-        console.log(`[Timekeeper] Resuming from current phase: ${event.label} (started at ${event.at.toISOString()})`);
+        console.log(
+          `[Timekeeper] Resuming from current phase: ${event.label} (started at ${event.at.toISOString()})`,
+        );
       }
       break;
     }
@@ -219,7 +213,7 @@ async function runSession(
   const progressTasks: Promise<void>[] = [];
 
   const eventsToRun = startIndex > 0 ? timeline.slice(startIndex) : timeline;
-  for (const event of eventsToRun) {
+  for (const [index, event] of eventsToRun.entries()) {
     const waitMs = getDelayFor(clock, event.at);
     if (waitMs > 0) {
       await delay(waitMs);
@@ -229,6 +223,12 @@ async function runSession(
       throw new Error(`Audio file not found: ${event.audioPath}`);
     }
 
+    // Bound this announcement to the time left before the next event, so a
+    // stalled player cannot overrun the gap and make the next event fire
+    // immediately after this one.
+    const nextEvent = eventsToRun[index + 1];
+    const msUntilNextEvent = nextEvent ? getDelayFor(clock, nextEvent.at) : null;
+
     const progressTask = await playAnnouncement(
       connection,
       client,
@@ -237,6 +237,7 @@ async function runSession(
       textChannel,
       event,
       clock,
+      resolvePlaybackTimeouts(msUntilNextEvent),
     );
 
     if (progressTask) {
@@ -267,6 +268,7 @@ async function playAnnouncement(
   textChannel: SendableTextChannel,
   event: TimekeeperTimelineEvent,
   clock: SessionClock,
+  timeouts: PlaybackTimeouts,
 ): Promise<Promise<void> | null> {
   await refreshStageSpeakerBeforePlayback(client, voiceChannel);
   connection.setSpeaking(true);
@@ -290,22 +292,27 @@ async function playAnnouncement(
   console.log(`[Timekeeper] Playing: ${event.audioPath} (order=${event.order})`);
   const resource = createAudioResource(event.audioPath);
   player.play(resource);
-  
+
   try {
-    await entersState(player, AudioPlayerStatus.Playing, 30_000);
+    await entersState(player, AudioPlayerStatus.Playing, timeouts.startTimeoutMs);
     console.log(`[Timekeeper] Playing state reached: order=${event.order}`);
   } catch {
-    console.error(`[Timekeeper] Failed to reach Playing state: order=${event.order}, status=${player.state.status}`);
+    console.error(
+      `[Timekeeper] Failed to reach Playing state: order=${event.order}, status=${player.state.status}`,
+    );
   }
-  
+
   try {
-    await entersState(player, AudioPlayerStatus.Idle, 60_000);
+    await entersState(player, AudioPlayerStatus.Idle, timeouts.finishTimeoutMs);
     console.log(`[Timekeeper] Idle state reached: order=${event.order}`);
   } catch {
-    console.error(`[Timekeeper] Failed to reach Idle state: order=${event.order}, status=${player.state.status}`);
+    console.error(
+      `[Timekeeper] Failed to reach Idle state: order=${event.order}, status=${player.state.status}`,
+    );
   }
-  
+
   connection.setSpeaking(false);
+  player.stop();
   return progressTask;
 }
 
@@ -322,10 +329,7 @@ async function resolveVoiceChannel(
   return channel;
 }
 
-async function prepareStageSpeaker(
-  voiceChannel: VoiceBasedChannel,
-  client: Client,
-): Promise<void> {
+async function prepareStageSpeaker(voiceChannel: VoiceBasedChannel, client: Client): Promise<void> {
   if (voiceChannel.type !== ChannelType.GuildStageVoice) {
     return;
   }
@@ -353,10 +357,7 @@ async function prepareStageSpeaker(
   await logVoiceStateSnapshot(botMember, voiceChannel, "after-stage-prepare");
 }
 
-async function connectForPlayback(
-  voiceChannel: VoiceBasedChannel,
-  client: Client,
-) {
+async function connectForPlayback(voiceChannel: VoiceBasedChannel, client: Client) {
   let connection = await joinAndPrepare(voiceChannel, client);
 
   if (voiceChannel.type !== ChannelType.GuildStageVoice) {
@@ -373,10 +374,7 @@ async function connectForPlayback(
   return connection;
 }
 
-async function joinAndPrepare(
-  voiceChannel: VoiceBasedChannel,
-  client: Client,
-) {
+async function joinAndPrepare(voiceChannel: VoiceBasedChannel, client: Client) {
   const connection = joinVoiceChannel({
     guildId: voiceChannel.guild.id,
     channelId: voiceChannel.id,
@@ -524,7 +522,9 @@ function buildCheckInComponents(event: TimekeeperTimelineEvent): ActionRowBuilde
     new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder()
         .setCustomId(buildCheckInCustomId(activeSession.id, event.order))
-        .setLabel(`${buildCheckInLabel(event.kind)} (${getSessionCheckInCount(activeSession, event.order)})`)
+        .setLabel(
+          `${buildCheckInLabel(event.kind)} (${getSessionCheckInCount(activeSession, event.order)})`,
+        )
         .setStyle(ButtonStyle.Primary),
     ),
   ];
@@ -567,9 +567,7 @@ async function postMissedProgressMessages(
   startIndex: number,
   now: Date,
 ): Promise<void> {
-  const missedTextEvents = timeline
-    .slice(0, startIndex)
-    .filter((event) => event.sendText);
+  const missedTextEvents = timeline.slice(0, startIndex).filter((event) => event.sendText);
 
   for (const event of missedTextEvents) {
     const effectiveNow = clampTimeToEvent(event, now);

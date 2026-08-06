@@ -54,20 +54,18 @@ describe("timekeeper engagement", () => {
         },
         () => 0,
       ),
-    ).resolves.toEqual(
+    ).resolves.toEqual([
       [
-        [
-          "## 今日の締めおみくじ",
-          "<@100> 良い流れをつかめています。次も崩れにくいです。 (参加: 2フェーズ / 連続: 3日)",
-          "ランダムWikipedia占い: https://ja.wikipedia.org/wiki/%E4%B8%80%E8%88%AC%E7%9B%B8%E5%AF%BE%E6%80%A7%E7%90%86%E8%AB%96",
-        ].join("\n"),
-        [
-          "## 今日の締めおみくじ",
-          "<@200> まずまず良い流れです。次の一手を丁寧に。 (参加: 1フェーズ / 連続: 1日)",
-          "ランダムWikipedia占い: https://ja.wikipedia.org/wiki/%E6%B7%B1%E6%B5%B7%E9%AD%9A",
-        ].join("\n"),
-      ],
-    );
+        "## 今日の締めおみくじ",
+        "<@100> 小吉、今日はまだ静かですが静かなものほどよく動いています。 (参加: 2フェーズ / 連続: 3日)",
+        "ランダムWikipedia占い: https://ja.wikipedia.org/wiki/%E4%B8%80%E8%88%AC%E7%9B%B8%E5%AF%BE%E6%80%A7%E7%90%86%E8%AB%96",
+      ].join("\n"),
+      [
+        "## 今日の締めおみくじ",
+        "<@200> 末吉、まだ何も起きていませんが何も起きていないにしては前向きです。 (参加: 1フェーズ / 連続: 1日)",
+        "ランダムWikipedia占い: https://ja.wikipedia.org/wiki/%E6%B7%B1%E6%B5%B7%E9%AD%9A",
+      ].join("\n"),
+    ]);
   });
 
   it("provides natural button labels and distinct participant counts", () => {

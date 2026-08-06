@@ -26,10 +26,7 @@ export function toEmojiKey(emoji: EmojiLike): string | null {
   return emoji.name;
 }
 
-export function findReactionRoleRule(
-  messageId: string,
-  emoji: EmojiLike,
-): ReactionRoleRule | null {
+export function findReactionRoleRule(messageId: string, emoji: EmojiLike): ReactionRoleRule | null {
   const emojiKey = toEmojiKey(emoji);
 
   if (!emojiKey) {
@@ -37,8 +34,7 @@ export function findReactionRoleRule(
   }
 
   return (
-    reactionRoleRules.find(
-      (rule) => rule.messageId === messageId && rule.emoji === emojiKey,
-    ) ?? null
+    reactionRoleRules.find((rule) => rule.messageId === messageId && rule.emoji === emojiKey) ??
+    null
   );
 }

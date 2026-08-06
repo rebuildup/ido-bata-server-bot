@@ -1,6 +1,14 @@
 import "dotenv/config";
 
-import { AudioPlayerStatus, NoSubscriberBehavior, VoiceConnectionStatus, createAudioPlayer, createAudioResource, entersState, joinVoiceChannel } from "@discordjs/voice";
+import {
+  AudioPlayerStatus,
+  createAudioPlayer,
+  createAudioResource,
+  entersState,
+  joinVoiceChannel,
+  NoSubscriberBehavior,
+  VoiceConnectionStatus,
+} from "@discordjs/voice";
 import { ChannelType, Client, Events, GatewayIntentBits } from "discord.js";
 
 import { timekeeperConfig } from "../features/timekeeper/config.js";

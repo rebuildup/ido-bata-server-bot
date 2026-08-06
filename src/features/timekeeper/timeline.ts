@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 
-import { timekeeperConfig, type TimekeeperConfig, type TimekeeperPhase } from "./config.js";
+import { type TimekeeperConfig, type TimekeeperPhase, timekeeperConfig } from "./config.js";
 
 const audioDir = join(process.cwd(), "tmp-audio");
 
@@ -41,17 +41,65 @@ export function buildTimekeeperTimeline(
   const sessionEnd = addMinutes(work3Start, phases[4]?.durationMinutes ?? 0);
 
   return [
-    createTimelineEvent(audioFiles, 1, "work-start-soon", phases[0], addMinutes(work1Start, -1), 1, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      1,
+      "work-start-soon",
+      phases[0],
+      addMinutes(work1Start, -1),
+      1,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 2, "phase-start", phases[0], work1Start, 1, totalSteps),
-    createTimelineEvent(audioFiles, 3, "phase-ending-soon", phases[0], addMinutes(break1Start, -1), 1, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      3,
+      "phase-ending-soon",
+      phases[0],
+      addMinutes(break1Start, -1),
+      1,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 4, "break-start", phases[1], break1Start, 2, totalSteps),
-    createTimelineEvent(audioFiles, 5, "work-start-soon", phases[2], addMinutes(work2Start, -1), 3, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      5,
+      "work-start-soon",
+      phases[2],
+      addMinutes(work2Start, -1),
+      3,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 6, "phase-start", phases[2], work2Start, 3, totalSteps),
-    createTimelineEvent(audioFiles, 7, "phase-ending-soon", phases[2], addMinutes(break2Start, -1), 3, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      7,
+      "phase-ending-soon",
+      phases[2],
+      addMinutes(break2Start, -1),
+      3,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 8, "break-start", phases[3], break2Start, 4, totalSteps),
-    createTimelineEvent(audioFiles, 9, "work-start-soon", phases[4], addMinutes(work3Start, -1), 5, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      9,
+      "work-start-soon",
+      phases[4],
+      addMinutes(work3Start, -1),
+      5,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 10, "phase-start", phases[4], work3Start, 5, totalSteps),
-    createTimelineEvent(audioFiles, 11, "phase-ending-soon", phases[4], addMinutes(sessionEnd, -1), 5, totalSteps),
+    createTimelineEvent(
+      audioFiles,
+      11,
+      "phase-ending-soon",
+      phases[4],
+      addMinutes(sessionEnd, -1),
+      5,
+      totalSteps,
+    ),
     createTimelineEvent(audioFiles, 12, "session-end", phases[4], sessionEnd, 5, totalSteps),
   ];
 }
@@ -102,9 +150,7 @@ function createTimelineEvent(
 
   const sendText = kind === "phase-start" || kind === "break-start";
   const endAt =
-    kind === "phase-start" || kind === "break-start"
-      ? addMinutes(at, phase.durationMinutes)
-      : null;
+    kind === "phase-start" || kind === "break-start" ? addMinutes(at, phase.durationMinutes) : null;
 
   return {
     at,

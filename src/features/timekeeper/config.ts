@@ -15,10 +15,10 @@ export type TimekeeperConfig = {
 export const timekeeperConfig: TimekeeperConfig = {
   startHourJst: 21,
   startMinuteJst: 0,
-textChannelId: "1487974752437141585",
+  textChannelId: "1487974752437141585",
   //textChannelId: "1488896517371858975",
   voiceChannelId: "1487974752437141585",
-//voiceChannelId: "1488896517371858975",
+  //voiceChannelId: "1488896517371858975",
   phases: [
     { label: "作業フェーズ 1", durationMinutes: 15 },
     { label: "5分休憩", durationMinutes: 5 },
@@ -29,8 +29,5 @@ textChannelId: "1487974752437141585",
 };
 
 export function isTimekeeperConfigured(config: TimekeeperConfig): boolean {
-  return (
-    !config.textChannelId.includes("HERE") &&
-    !config.voiceChannelId.includes("HERE")
-  );
+  return !config.textChannelId.includes("HERE") && !config.voiceChannelId.includes("HERE");
 }
