@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   getCurrentOrNextDailyStartAt,
   getNextDailyStartAt,
+  getTimekeeperPreparationStartAt,
 } from "../src/features/timekeeper/schedule.js";
+import { timekeeperConfig } from "../src/features/timekeeper/config.js";
 import {
   buildProgressMessage,
   buildTimekeeperTimeline,
@@ -172,5 +174,22 @@ describe("timekeeper timeline", () => {
     const nextStartAt = getCurrentOrNextDailyStartAt(new Date("2026-04-01T22:40:00+09:00"), 21, 0);
 
     expect(nextStartAt.toISOString()).toBe("2026-04-02T12:00:00.000Z");
+  });
+
+  it.each([4, 6])("rejects phaseCount %d with exact error message", (phaseCount) => {
+    const phases = phaseCount === 4
+      ? timekeeperConfig.phases.slice(0, 4)
+      : [...timekeeperConfig.phases, timekeeperConfig.phases[0]!];
+
+    expect(() => buildTimekeeperTimeline(new Date("2026-04-01T21:00:00+09:00"), { ...timekeeperConfig, phases })).toThrow(
+      `Timekeeper requires exactly 5 phases, received ${phaseCount}`,
+    );
+  });
+
+  it("preparation starts 90 seconds before a 21:00 JST session start", () => {
+    const sessionStartAt = new Date("2026-04-01T21:00:00+09:00");
+    const preparationStartAt = getTimekeeperPreparationStartAt(sessionStartAt);
+
+    expect(preparationStartAt.toISOString()).toBe("2026-04-01T11:58:30.000Z");
   });
 });

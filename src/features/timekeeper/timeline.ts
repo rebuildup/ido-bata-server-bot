@@ -29,8 +29,11 @@ export function buildTimekeeperTimeline(
   startAt: Date,
   config: TimekeeperConfig = timekeeperConfig,
 ): TimekeeperTimelineEvent[] {
-  const audioFiles = listAudioFiles();
   const phases = config.phases;
+  if (phases.length !== 5) {
+    throw new Error(`Timekeeper requires exactly 5 phases, received ${phases.length}`);
+  }
+  const audioFiles = listAudioFiles();
   const totalSteps = phases.length;
 
   const work1Start = new Date(startAt);

@@ -26,7 +26,15 @@ import {
 } from "./engagement.js";
 import type { PlaybackTimeouts } from "./playback-budget.js";
 import { resolvePlaybackTimeouts } from "./playback-budget.js";
-import { getCurrentOrNextDailyStartAt } from "./schedule.js";
+import { getCurrentOrNextDailyStartAt, getTimekeeperPreparationStartAt } from "./schedule.js";
+import {
+  clampTimeToEvent,
+  createSessionClock,
+  findTimelineStartIndex,
+  getDelayFor,
+  getTimelineNow,
+  type SessionClock,
+} from "./session-clock.js";
 import {
   buildProgressMessage,
   buildTimekeeperTimeline,
@@ -44,15 +52,9 @@ type SendableTextChannel = {
   ) => Promise<EditableTextMessage>;
 };
 
-type SessionClock = {
-  isMidSession: boolean;
-  minuteMs: number;
-  runBase: number;
-  timelineBase: number;
-};
-
 let activeSession: TimekeeperSessionEngagement | null = null;
 let activeTimeline: TimekeeperTimelineEvent[] = [];
+let activeClock: SessionClock | null = null;
 
 export function registerTimekeeper(client: Client): void {
   client.on(Events.InteractionCreate, async (interaction) => {
@@ -68,10 +70,10 @@ export function registerTimekeeper(client: Client): void {
     const recorded = recordCheckIn(activeSession, interaction.user.id, parsed.order);
     const event = activeTimeline.find((entry) => entry.order === parsed.order);
 
-    if (event) {
+    if (event && activeClock) {
       const updatedContent = buildProgressMessage(
         event,
-        clampNowToEvent(event),
+        clampTimeToEvent(event, getTimelineNow(activeClock, Date.now())),
         getSessionCheckInCount(activeSession, event.order),
       );
 
@@ -130,7 +132,7 @@ function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
     config.startMinuteJst,
     config.phases,
   );
-  const preparationStartAt = new Date(nextStartAt.getTime() - 60_000);
+  const preparationStartAt = getTimekeeperPreparationStartAt(nextStartAt);
   const delayMs = Math.max(0, preparationStartAt.getTime() - Date.now());
 
   console.log(
@@ -182,39 +184,42 @@ async function runSession(client: Client, config: TimekeeperConfig, startAt: Dat
 
   const timeline = buildTimekeeperTimeline(startAt, config);
   const now = new Date();
+  const startIndex = findTimelineStartIndex(timeline, now);
 
-  let startIndex = 0;
-  for (let i = 0; i < timeline.length; i += 1) {
-    const event = timeline[i];
-    const eventEnd = event.endAt ?? new Date(event.at.getTime() + 60_000);
-    if (now < eventEnd) {
-      startIndex = i;
-      if (event.at > now) {
-        console.log(
-          `[Timekeeper] Starting from upcoming phase: ${event.label} (at ${event.at.toISOString()})`,
-        );
-      } else {
-        console.log(
-          `[Timekeeper] Resuming from current phase: ${event.label} (started at ${event.at.toISOString()})`,
-        );
-      }
-      break;
-    }
+  if (startIndex === -1) {
+    console.log("Session has already ended; skipping playback.");
+    connection.destroy();
+    return;
+  }
+
+  const firstEvent = timeline[startIndex];
+  if (firstEvent && firstEvent.at > now) {
+    console.log(
+      `[Timekeeper] Starting from upcoming phase: ${firstEvent.label} (at ${firstEvent.at.toISOString()})`,
+    );
+  } else if (firstEvent) {
+    console.log(
+      `[Timekeeper] Resuming from current phase: ${firstEvent.label} (started at ${firstEvent.at.toISOString()})`,
+    );
   }
 
   activeTimeline = timeline;
   activeSession = createSessionEngagement(startAt.toISOString());
 
+  const minuteMs = process.env.TIMEKEEPER_RUN_ON_READY === "true" ? 1_000 : 60_000;
+  const clock = createSessionClock(timeline, startAt, startIndex, minuteMs, Date.now());
+  activeClock = clock;
+  const timelineNow = getTimelineNow(clock, Date.now());
+
   if (startIndex > 0) {
-    await postMissedProgressMessages(textChannel, timeline, startIndex, now);
+    await postMissedProgressMessages(textChannel, timeline, startIndex, timelineNow);
   }
 
-  const clock = createSessionClock(timeline, startAt, startIndex);
   const progressTasks: Promise<void>[] = [];
 
-  const eventsToRun = startIndex > 0 ? timeline.slice(startIndex) : timeline;
+  const eventsToRun = timeline.slice(startIndex);
   for (const [index, event] of eventsToRun.entries()) {
-    const waitMs = getDelayFor(clock, event.at);
+    const waitMs = getDelayFor(clock, event.at, Date.now());
     if (waitMs > 0) {
       await delay(waitMs);
     }
@@ -227,7 +232,7 @@ async function runSession(client: Client, config: TimekeeperConfig, startAt: Dat
     // stalled player cannot overrun the gap and make the next event fire
     // immediately after this one.
     const nextEvent = eventsToRun[index + 1];
-    const msUntilNextEvent = nextEvent ? getDelayFor(clock, nextEvent.at) : null;
+    const msUntilNextEvent = nextEvent ? getDelayFor(clock, nextEvent.at, Date.now()) : null;
 
     const progressTask = await playAnnouncement(
       connection,
@@ -257,6 +262,7 @@ async function runSession(client: Client, config: TimekeeperConfig, startAt: Dat
   }
   activeSession = null;
   activeTimeline = [];
+  activeClock = null;
   connection.destroy();
 }
 
@@ -275,7 +281,7 @@ async function playAnnouncement(
   await delay(250);
 
   let progressTask: Promise<void> | null = null;
-  const messageNow = clampNowToEvent(event);
+  const messageNow = clampTimeToEvent(event, getTimelineNow(clock, Date.now()));
   const initialMessage = buildProgressMessage(
     event,
     messageNow,
@@ -420,31 +426,6 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function createSessionClock(
-  timeline: TimekeeperTimelineEvent[],
-  startAt: Date,
-  startIndex: number,
-): SessionClock {
-  const isRunningMidSession = startIndex > 0;
-  const midSessionBase = timeline[startIndex]?.at.getTime() ?? startAt.getTime();
-  return {
-    isMidSession: isRunningMidSession,
-    minuteMs: process.env.TIMEKEEPER_RUN_ON_READY === "true" ? 1_000 : 60_000,
-    timelineBase: isRunningMidSession ? midSessionBase : startAt.getTime(),
-    runBase: isRunningMidSession ? Date.now() : startAt.getTime(),
-  };
-}
-
-function getDelayFor(clock: SessionClock, targetAt: Date): number {
-  if (clock.isMidSession && process.env.TIMEKEEPER_RUN_ON_READY !== "true") {
-    return targetAt.getTime() - Date.now();
-  }
-
-  const minutesFromBase = (targetAt.getTime() - clock.timelineBase) / 60_000;
-  const runtimeAt = clock.runBase + minutesFromBase * clock.minuteMs;
-  return runtimeAt - Date.now();
-}
-
 async function resolveBotMember(
   guild: VoiceBasedChannel["guild"],
   userId: string,
@@ -487,12 +468,12 @@ async function updateProgressMessage(
     return;
   }
 
-  const now = clampNowToEvent(event);
+  const now = clampTimeToEvent(event, getTimelineNow(clock, Date.now()));
   const elapsedMinutes = getElapsedWholeMinutes(event, now);
 
   for (let minute = elapsedMinutes + 1; minute <= event.durationMinutes; minute += 1) {
     const targetAt = new Date(event.at.getTime() + minute * 60_000);
-    const waitMs = getDelayFor(clock, targetAt);
+    const waitMs = getDelayFor(clock, targetAt, Date.now());
     if (waitMs > 0) {
       await delay(waitMs);
     }
@@ -539,23 +520,6 @@ function formatSessionDate(date: Date): string {
   }).format(date);
 }
 
-function clampNowToEvent(event: TimekeeperTimelineEvent): Date {
-  if (!event.endAt) {
-    return event.at;
-  }
-
-  const now = new Date();
-  if (now < event.at) {
-    return event.at;
-  }
-
-  if (now > event.endAt) {
-    return event.endAt;
-  }
-
-  return now;
-}
-
 function getElapsedWholeMinutes(event: TimekeeperTimelineEvent, now: Date): number {
   const elapsedMs = Math.max(0, now.getTime() - event.at.getTime());
   return Math.floor(elapsedMs / 60_000);
@@ -585,20 +549,4 @@ async function postMissedProgressMessages(
       components: effectiveNow < (event.endAt ?? event.at) ? buildCheckInComponents(event) : [],
     });
   }
-}
-
-function clampTimeToEvent(event: TimekeeperTimelineEvent, time: Date): Date {
-  if (!event.endAt) {
-    return event.at;
-  }
-
-  if (time < event.at) {
-    return event.at;
-  }
-
-  if (time > event.endAt) {
-    return event.endAt;
-  }
-
-  return time;
 }

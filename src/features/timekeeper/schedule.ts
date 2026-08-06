@@ -1,6 +1,8 @@
 import { timekeeperConfig } from "./config.js";
 
 const JST_OFFSET_MINUTES = 9 * 60;
+const FIRST_ANNOUNCEMENT_LEAD_MS = 60_000;
+const CONNECTION_LEAD_MS = 30_000;
 
 export function getNextDailyStartAt(
   now: Date,
@@ -59,4 +61,8 @@ function getDailyStartAt(now: Date, startHourJst: number, startMinuteJst: number
   );
 
   return new Date(todayStartJst.getTime() - JST_OFFSET_MINUTES * 60_000);
+}
+
+export function getTimekeeperPreparationStartAt(startAt: Date): Date {
+  return new Date(startAt.getTime() - FIRST_ANNOUNCEMENT_LEAD_MS - CONNECTION_LEAD_MS);
 }
