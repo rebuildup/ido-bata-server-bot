@@ -4,7 +4,10 @@ import {
   buildProgressMessage,
   buildTimekeeperTimeline,
 } from "../src/features/timekeeper/timeline.js";
-import { getNextDailyStartAt } from "../src/features/timekeeper/schedule.js";
+import {
+  getCurrentOrNextDailyStartAt,
+  getNextDailyStartAt,
+} from "../src/features/timekeeper/schedule.js";
 
 describe("timekeeper timeline", () => {
   it("builds the full timeline in audio file order", () => {
@@ -102,9 +105,29 @@ describe("timekeeper timeline", () => {
     expect(nextStartAt.toISOString()).toBe("2026-04-01T12:00:00.000Z");
   });
 
-  it("schedules tomorrow when the current time is after 21:00 JST", () => {
-    const nextStartAt = getNextDailyStartAt(
+  it("keeps today's start when current time is still inside today's session window", () => {
+    const nextStartAt = getCurrentOrNextDailyStartAt(
       new Date("2026-04-01T21:30:00+09:00"),
+      21,
+      0,
+    );
+
+    expect(nextStartAt.toISOString()).toBe("2026-04-01T12:00:00.000Z");
+  });
+
+  it("schedules tomorrow when current time is already after today's session end", () => {
+    const nextStartAt = getCurrentOrNextDailyStartAt(
+      new Date("2026-04-01T22:50:00+09:00"),
+      21,
+      0,
+    );
+
+    expect(nextStartAt.toISOString()).toBe("2026-04-02T12:00:00.000Z");
+  });
+
+  it("schedules tomorrow when current time is exactly at today's session end", () => {
+    const nextStartAt = getCurrentOrNextDailyStartAt(
+      new Date("2026-04-01T22:40:00+09:00"),
       21,
       0,
     );

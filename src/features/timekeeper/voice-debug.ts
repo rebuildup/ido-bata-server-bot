@@ -8,17 +8,17 @@ export function attachVoiceDebugging(
   connection: VoiceConnection,
   player: AudioPlayer,
 ): void {
-  connection.on("stateChange", (oldState, newState) => {
-    logJson("voice-connection-state", {
-      oldStatus: oldState.status,
-      newStatus: newState.status,
-      subscription: "subscription" in connection.state ? Boolean(connection.state.subscription) : false,
-      voicePrivacyCode: connection.voicePrivacyCode ?? null,
-      wsPing: connection.ping.ws ?? null,
-      udpPing: connection.ping.udp ?? null,
-      rejoinAttempts: connection.rejoinAttempts,
-    });
-  });
+  // connection.on("stateChange", (oldState, newState) => {
+  //   logJson("voice-connection-state", {
+  //     oldStatus: oldState.status,
+  //     newStatus: newState.status,
+  //     subscription: "subscription" in connection.state ? Boolean(connection.state.subscription) : false,
+  //     voicePrivacyCode: connection.voicePrivacyCode ?? null,
+  //     wsPing: connection.ping.ws ?? null,
+  //     udpPing: connection.ping.udp ?? null,
+  //     rejoinAttempts: connection.rejoinAttempts,
+  //   });
+  // });
 
   connection.on("error", (error) => {
     logJson("voice-connection-error", {
@@ -30,15 +30,15 @@ export function attachVoiceDebugging(
     });
   });
 
-  player.on("stateChange", (oldState, newState) => {
-    logJson("audio-player-state", {
-      oldStatus: oldState.status,
-      newStatus: newState.status,
-      playableCount: player.playable.length,
-      checkPlayable: player.checkPlayable(),
-      resourceReadable: hasReadableResource(newState),
-    });
-  });
+  // player.on("stateChange", (oldState, newState) => {
+  //   logJson("audio-player-state", {
+  //     oldStatus: oldState.status,
+  //     newStatus: newState.status,
+  //     playableCount: player.playable.length,
+  //     checkPlayable: player.checkPlayable(),
+  //     resourceReadable: hasReadableResource(newState),
+  //   });
+  // });
 
   player.on("error", (error) => {
     logJson("audio-player-error", {
@@ -48,7 +48,7 @@ export function attachVoiceDebugging(
     });
   });
 
-  instrumentInternalMethods(connection, player);
+  // instrumentInternalMethods(connection, player);
 }
 
 export async function logVoiceStateSnapshot(

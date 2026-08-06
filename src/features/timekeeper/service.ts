@@ -34,7 +34,7 @@ import {
   recordCheckIn,
   type TimekeeperSessionEngagement,
 } from "./engagement.js";
-import { getNextDailyStartAt } from "./schedule.js";
+import { getCurrentOrNextDailyStartAt } from "./schedule.js";
 import {
   buildProgressMessage,
   buildTimekeeperTimeline,
@@ -53,6 +53,7 @@ type SendableTextChannel = {
 };
 
 type SessionClock = {
+  isMidSession: boolean;
   minuteMs: number;
   runBase: number;
   timelineBase: number;
@@ -99,8 +100,19 @@ export function registerTimekeeper(client: Client): void {
 
   client.once(Events.ClientReady, () => {
     if (process.env.TIMEKEEPER_RUN_ON_READY === "true") {
-      console.log("Running timekeeper immediately because TIMEKEEPER_RUN_ON_READY=true");
-      void runSession(client, timekeeperConfig, new Date()).catch((error: unknown) => {
+      const now = new Date();
+      const sessionStartAt = getCurrentOrNextDailyStartAt(
+        now,
+        timekeeperConfig.startHourJst,
+        timekeeperConfig.startMinuteJst,
+        timekeeperConfig.phases,
+      );
+      const startAt = isWithinSessionWindow(now, sessionStartAt, timekeeperConfig)
+        ? sessionStartAt
+        : now;
+
+      console.log(`Running timekeeper immediately because TIMEKEEPER_RUN_ON_READY=true (startAt=${startAt.toISOString()})`);
+      void runSession(client, timekeeperConfig, startAt).catch((error: unknown) => {
         console.error("Immediate timekeeper session failed", error);
       });
       return;
@@ -116,10 +128,16 @@ function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
     return;
   }
 
-  const nextStartAt = getNextDailyStartAt(new Date(), config.startHourJst, config.startMinuteJst);
-  const delayMs = Math.max(0, nextStartAt.getTime() - Date.now());
+  const nextStartAt = getCurrentOrNextDailyStartAt(
+    new Date(),
+    config.startHourJst,
+    config.startMinuteJst,
+    config.phases,
+  );
+  const preparationStartAt = new Date(nextStartAt.getTime() - 60_000);
+  const delayMs = Math.max(0, preparationStartAt.getTime() - Date.now());
 
-  console.log(`Next timekeeper session scheduled for ${nextStartAt.toISOString()}`);
+  console.log(`Next timekeeper session scheduled for ${nextStartAt.toISOString()} (preparation starts at ${preparationStartAt.toISOString()})`);
 
   setTimeout(() => {
     void runSession(client, config, nextStartAt)
@@ -130,6 +148,19 @@ function scheduleNextSession(client: Client, config: TimekeeperConfig): void {
         scheduleNextSession(client, config);
       });
   }, delayMs);
+}
+
+function isWithinSessionWindow(
+  now: Date,
+  startAt: Date,
+  config: TimekeeperConfig,
+): boolean {
+  const totalDurationMinutes = config.phases.reduce(
+    (total, phase) => total + phase.durationMinutes,
+    0,
+  );
+  const sessionEndAt = new Date(startAt.getTime() + totalDurationMinutes * 60_000);
+  return now >= startAt && now < sessionEndAt;
 }
 
 async function runSession(
@@ -160,12 +191,35 @@ async function runSession(
   connection.subscribe(player);
 
   const timeline = buildTimekeeperTimeline(startAt, config);
+  const now = new Date();
+
+  let startIndex = 0;
+  for (let i = 0; i < timeline.length; i += 1) {
+    const event = timeline[i];
+    const eventEnd = event.endAt ?? new Date(event.at.getTime() + 60_000);
+    if (now < eventEnd) {
+      startIndex = i;
+      if (event.at > now) {
+        console.log(`[Timekeeper] Starting from upcoming phase: ${event.label} (at ${event.at.toISOString()})`);
+      } else {
+        console.log(`[Timekeeper] Resuming from current phase: ${event.label} (started at ${event.at.toISOString()})`);
+      }
+      break;
+    }
+  }
+
   activeTimeline = timeline;
-  const clock = createSessionClock(timeline, startAt);
   activeSession = createSessionEngagement(startAt.toISOString());
+
+  if (startIndex > 0) {
+    await postMissedProgressMessages(textChannel, timeline, startIndex, now);
+  }
+
+  const clock = createSessionClock(timeline, startAt, startIndex);
   const progressTasks: Promise<void>[] = [];
 
-  for (const event of timeline) {
+  const eventsToRun = startIndex > 0 ? timeline.slice(startIndex) : timeline;
+  for (const event of eventsToRun) {
     const waitMs = getDelayFor(clock, event.at);
     if (waitMs > 0) {
       await delay(waitMs);
@@ -219,9 +273,10 @@ async function playAnnouncement(
   await delay(250);
 
   let progressTask: Promise<void> | null = null;
+  const messageNow = clampNowToEvent(event);
   const initialMessage = buildProgressMessage(
     event,
-    event.at,
+    messageNow,
     activeSession ? getSessionCheckInCount(activeSession, event.order) : 0,
   );
   if (initialMessage) {
@@ -232,11 +287,24 @@ async function playAnnouncement(
     progressTask = updateProgressMessage(sentMessage, event, clock);
   }
 
-  console.log(`Playing audio: ${event.audioPath}`);
+  console.log(`[Timekeeper] Playing: ${event.audioPath} (order=${event.order})`);
   const resource = createAudioResource(event.audioPath);
   player.play(resource);
-  await entersState(player, AudioPlayerStatus.Playing, 30_000);
-  await entersState(player, AudioPlayerStatus.Idle, 60_000);
+  
+  try {
+    await entersState(player, AudioPlayerStatus.Playing, 30_000);
+    console.log(`[Timekeeper] Playing state reached: order=${event.order}`);
+  } catch {
+    console.error(`[Timekeeper] Failed to reach Playing state: order=${event.order}, status=${player.state.status}`);
+  }
+  
+  try {
+    await entersState(player, AudioPlayerStatus.Idle, 60_000);
+    console.log(`[Timekeeper] Idle state reached: order=${event.order}`);
+  } catch {
+    console.error(`[Timekeeper] Failed to reach Idle state: order=${event.order}, status=${player.state.status}`);
+  }
+  
   connection.setSpeaking(false);
   return progressTask;
 }
@@ -277,7 +345,8 @@ async function prepareStageSpeaker(
     console.log("Stage speaker mode enabled by unsuppressing the bot.");
   } catch (error) {
     console.warn("Failed to unsuppress bot in stage channel. Requesting to speak instead.", error);
-    await botMember.voice.setRequestToSpeak(true);
+    await botMember.voice.setRequestToSpeak(true).catch(() => undefined);
+    await delay(2_000);
   }
 
   await delay(1_000);
@@ -356,15 +425,23 @@ function delay(ms: number): Promise<void> {
 function createSessionClock(
   timeline: TimekeeperTimelineEvent[],
   startAt: Date,
+  startIndex: number,
 ): SessionClock {
+  const isRunningMidSession = startIndex > 0;
+  const midSessionBase = timeline[startIndex]?.at.getTime() ?? startAt.getTime();
   return {
+    isMidSession: isRunningMidSession,
     minuteMs: process.env.TIMEKEEPER_RUN_ON_READY === "true" ? 1_000 : 60_000,
-    timelineBase: timeline[0]?.at.getTime() ?? startAt.getTime(),
-    runBase: Date.now(),
+    timelineBase: isRunningMidSession ? midSessionBase : startAt.getTime(),
+    runBase: isRunningMidSession ? Date.now() : startAt.getTime(),
   };
 }
 
 function getDelayFor(clock: SessionClock, targetAt: Date): number {
+  if (clock.isMidSession && process.env.TIMEKEEPER_RUN_ON_READY !== "true") {
+    return targetAt.getTime() - Date.now();
+  }
+
   const minutesFromBase = (targetAt.getTime() - clock.timelineBase) / 60_000;
   const runtimeAt = clock.runBase + minutesFromBase * clock.minuteMs;
   return runtimeAt - Date.now();
@@ -391,7 +468,14 @@ async function refreshStageSpeakerBeforePlayback(
     return;
   }
 
-  await botMember.voice.setSuppressed(false).catch(() => undefined);
+  try {
+    await botMember.voice.setSuppressed(false);
+  } catch {
+    console.log("Failed to unsuppress, requesting to speak...");
+    await botMember.voice.setRequestToSpeak(true).catch(() => undefined);
+    await delay(2_000);
+  }
+
   await delay(500);
   await logVoiceStateSnapshot(botMember, voiceChannel, "before-playback");
 }
@@ -405,7 +489,10 @@ async function updateProgressMessage(
     return;
   }
 
-  for (let minute = 1; minute <= event.durationMinutes; minute += 1) {
+  const now = clampNowToEvent(event);
+  const elapsedMinutes = getElapsedWholeMinutes(event, now);
+
+  for (let minute = elapsedMinutes + 1; minute <= event.durationMinutes; minute += 1) {
     const targetAt = new Date(event.at.getTime() + minute * 60_000);
     const waitMs = getDelayFor(clock, targetAt);
     if (waitMs > 0) {
@@ -467,4 +554,53 @@ function clampNowToEvent(event: TimekeeperTimelineEvent): Date {
   }
 
   return now;
+}
+
+function getElapsedWholeMinutes(event: TimekeeperTimelineEvent, now: Date): number {
+  const elapsedMs = Math.max(0, now.getTime() - event.at.getTime());
+  return Math.floor(elapsedMs / 60_000);
+}
+
+async function postMissedProgressMessages(
+  textChannel: SendableTextChannel,
+  timeline: TimekeeperTimelineEvent[],
+  startIndex: number,
+  now: Date,
+): Promise<void> {
+  const missedTextEvents = timeline
+    .slice(0, startIndex)
+    .filter((event) => event.sendText);
+
+  for (const event of missedTextEvents) {
+    const effectiveNow = clampTimeToEvent(event, now);
+    const content = buildProgressMessage(
+      event,
+      effectiveNow,
+      activeSession ? getSessionCheckInCount(activeSession, event.order) : 0,
+    );
+    if (!content) {
+      continue;
+    }
+
+    await textChannel.send({
+      content,
+      components: effectiveNow < (event.endAt ?? event.at) ? buildCheckInComponents(event) : [],
+    });
+  }
+}
+
+function clampTimeToEvent(event: TimekeeperTimelineEvent, time: Date): Date {
+  if (!event.endAt) {
+    return event.at;
+  }
+
+  if (time < event.at) {
+    return event.at;
+  }
+
+  if (time > event.endAt) {
+    return event.endAt;
+  }
+
+  return time;
 }
