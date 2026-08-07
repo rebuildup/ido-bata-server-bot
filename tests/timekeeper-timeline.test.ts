@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   getCurrentOrNextDailyStartAt,
@@ -20,7 +22,7 @@ describe("timekeeper timeline", () => {
         kind: event.kind,
         at: event.at.toISOString(),
         label: event.label,
-        audio: event.audioPath.match(/\\tmp-audio\\([^\\]+)/)?.[1],
+        audio: basename(event.audioPath),
       })),
     ).toEqual([
       {
