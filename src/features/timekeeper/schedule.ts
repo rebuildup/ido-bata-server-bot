@@ -2,7 +2,7 @@ import { timekeeperConfig } from "./config.js";
 
 const JST_OFFSET_MINUTES = 9 * 60;
 const FIRST_ANNOUNCEMENT_LEAD_MS = 60_000;
-const CONNECTION_LEAD_MS = 30_000;
+const CONNECTION_LEAD_MS = 2 * 60_000;
 
 export function getNextDailyStartAt(
   now: Date,
