@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import {
   getCurrentOrNextDailyStartAt,
@@ -20,7 +22,7 @@ describe("timekeeper timeline", () => {
         kind: event.kind,
         at: event.at.toISOString(),
         label: event.label,
-        audio: event.audioPath.match(/\\tmp-audio\\([^\\]+)/)?.[1],
+        audio: basename(event.audioPath),
       })),
     ).toEqual([
       {
@@ -186,10 +188,10 @@ describe("timekeeper timeline", () => {
     );
   });
 
-  it("preparation starts 90 seconds before a 21:00 JST session start", () => {
+  it("preparation starts 3 minutes before a 21:00 JST session start", () => {
     const sessionStartAt = new Date("2026-04-01T21:00:00+09:00");
     const preparationStartAt = getTimekeeperPreparationStartAt(sessionStartAt);
 
-    expect(preparationStartAt.toISOString()).toBe("2026-04-01T11:58:30.000Z");
+    expect(preparationStartAt.toISOString()).toBe("2026-04-01T11:57:00.000Z");
   });
 });

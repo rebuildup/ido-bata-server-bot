@@ -52,6 +52,10 @@ type SendableTextChannel = {
   ) => Promise<EditableTextMessage>;
 };
 
+type AnnouncementPlaybackResult = {
+  progressTask: Promise<void> | null;
+};
+
 let activeSession: TimekeeperSessionEngagement | null = null;
 let activeTimeline: TimekeeperTimelineEvent[] = [];
 let activeClock: SessionClock | null = null;
@@ -219,10 +223,20 @@ async function runSession(client: Client, config: TimekeeperConfig, startAt: Dat
 
   const eventsToRun = timeline.slice(startIndex);
   for (const [index, event] of eventsToRun.entries()) {
-    const waitMs = getDelayFor(clock, event.at, Date.now());
+    const beforeWaitMs = Date.now();
+    const waitMs = getDelayFor(clock, event.at, beforeWaitMs);
+    console.log(
+      `[Timekeeper] Event waiting: order=${event.order}, kind=${event.kind}, scheduledAt=${event.at.toISOString()}, now=${new Date(beforeWaitMs).toISOString()}, waitMs=${waitMs}`,
+    );
+
     if (waitMs > 0) {
       await delay(waitMs);
     }
+
+    const firedAtMs = Date.now();
+    console.log(
+      `[Timekeeper] Event firing: order=${event.order}, kind=${event.kind}, scheduledAt=${event.at.toISOString()}, actualAt=${new Date(firedAtMs).toISOString()}, latenessMs=${firedAtMs - event.at.getTime()}`,
+    );
 
     if (!existsSync(event.audioPath)) {
       throw new Error(`Audio file not found: ${event.audioPath}`);
@@ -234,7 +248,7 @@ async function runSession(client: Client, config: TimekeeperConfig, startAt: Dat
     const nextEvent = eventsToRun[index + 1];
     const msUntilNextEvent = nextEvent ? getDelayFor(clock, nextEvent.at, Date.now()) : null;
 
-    const progressTask = await playAnnouncement(
+    const { progressTask } = await playAnnouncement(
       connection,
       client,
       voiceChannel,
@@ -275,7 +289,7 @@ async function playAnnouncement(
   event: TimekeeperTimelineEvent,
   clock: SessionClock,
   timeouts: PlaybackTimeouts,
-): Promise<Promise<void> | null> {
+): Promise<AnnouncementPlaybackResult> {
   await refreshStageSpeakerBeforePlayback(client, voiceChannel);
   connection.setSpeaking(true);
   await delay(250);
@@ -295,7 +309,9 @@ async function playAnnouncement(
     progressTask = updateProgressMessage(sentMessage, event, clock);
   }
 
-  console.log(`[Timekeeper] Playing: ${event.audioPath} (order=${event.order})`);
+  console.log(
+    `[Timekeeper] Playing: ${event.audioPath} (order=${event.order}, actualAt=${new Date().toISOString()})`,
+  );
   const resource = createAudioResource(event.audioPath);
   player.play(resource);
 
@@ -319,7 +335,11 @@ async function playAnnouncement(
 
   connection.setSpeaking(false);
   player.stop();
-  return progressTask;
+
+  // Do not return progressTask directly from this async function. Async return
+  // adopts returned promises, which would block the event loop until the whole
+  // phase progress updater finishes and make the one-minute warning fire late.
+  return { progressTask };
 }
 
 async function resolveVoiceChannel(
